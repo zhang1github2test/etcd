@@ -42,6 +42,7 @@ var (
 )
 
 func startEtcdOrProxyV2(args []string) {
+	// 禁用 gRPC 跟踪
 	grpc.EnableTracing = false
 
 	cfg := newConfig()
