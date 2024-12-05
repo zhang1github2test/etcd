@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-semver/semver"
+	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -52,6 +53,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v2store"
+	"go.etcd.io/etcd/server/v3/etcdserver/api/v3alarm"
 	apply2 "go.etcd.io/etcd/server/v3/etcdserver/apply"
 	"go.etcd.io/etcd/server/v3/etcdserver/cindex"
 	"go.etcd.io/etcd/server/v3/etcdserver/errors"
@@ -156,11 +158,19 @@ func TestV2SetMemberAttributes(t *testing.T) {
 	defer betesting.Close(t, be)
 	cl := newTestClusterWithBackend(t, []*membership.Member{{ID: 1}}, be)
 	srv := &EtcdServer{
-		lgMu:    new(sync.RWMutex),
-		lg:      zaptest.NewLogger(t),
-		v2store: mockstore.NewRecorder(),
-		cluster: cl,
+		lgMu:         new(sync.RWMutex),
+		lg:           zaptest.NewLogger(t),
+		v2store:      mockstore.NewRecorder(),
+		cluster:      cl,
+		consistIndex: cindex.NewConsistentIndex(be),
+		w:            wait.New(),
 	}
+	as, err := v3alarm.NewAlarmStore(srv.lg, schema.NewAlarmBackend(srv.lg, be))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.alarmStore = as
+	srv.uberApply = srv.NewUberApplier()
 
 	req := pb.Request{
 		Method: "PUT",
@@ -168,7 +178,13 @@ func TestV2SetMemberAttributes(t *testing.T) {
 		Path:   membership.MemberAttributesStorePath(1),
 		Val:    `{"Name":"abc","ClientURLs":["http://127.0.0.1:2379"]}`,
 	}
-	srv.applyV2Request((*RequestV2)(&req), membership.ApplyBoth)
+	data, err := proto.Marshal(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.applyEntryNormal(&raftpb.Entry{
+		Data: data,
+	}, membership.ApplyV2storeOnly)
 	w := membership.Attributes{Name: "abc", ClientURLs: []string{"http://127.0.0.1:2379"}}
 	if g := cl.Member(1).Attributes; !reflect.DeepEqual(g, w) {
 		t.Errorf("attributes = %v, want %v", g, w)
@@ -183,11 +199,19 @@ func TestV2SetClusterVersion(t *testing.T) {
 	cl := newTestClusterWithBackend(t, []*membership.Member{}, be)
 	cl.SetVersion(semver.New("3.4.0"), api.UpdateCapability, membership.ApplyBoth)
 	srv := &EtcdServer{
-		lgMu:    new(sync.RWMutex),
-		lg:      zaptest.NewLogger(t),
-		v2store: mockstore.NewRecorder(),
-		cluster: cl,
+		lgMu:         new(sync.RWMutex),
+		lg:           zaptest.NewLogger(t),
+		v2store:      mockstore.NewRecorder(),
+		cluster:      cl,
+		consistIndex: cindex.NewConsistentIndex(be),
+		w:            wait.New(),
 	}
+	as, err := v3alarm.NewAlarmStore(srv.lg, schema.NewAlarmBackend(srv.lg, be))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.alarmStore = as
+	srv.uberApply = srv.NewUberApplier()
 
 	req := pb.Request{
 		Method: "PUT",
@@ -195,7 +219,13 @@ func TestV2SetClusterVersion(t *testing.T) {
 		Path:   membership.StoreClusterVersionKey(),
 		Val:    "3.5.0",
 	}
-	srv.applyV2Request((*RequestV2)(&req), membership.ApplyBoth)
+	data, err := proto.Marshal(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.applyEntryNormal(&raftpb.Entry{
+		Data: data,
+	}, membership.ApplyV2storeOnly)
 	if g := cl.Version(); !reflect.DeepEqual(*g, version.V3_5) {
 		t.Errorf("attributes = %v, want %v", *g, version.V3_5)
 	}
@@ -583,7 +613,8 @@ func TestApplyMultiConfChangeShouldStop(t *testing.T) {
 			Data: pbutil.MustMarshal(
 				&raftpb.ConfChange{
 					Type:   raftpb.ConfChangeRemoveNode,
-					NodeID: uint64(i)}),
+					NodeID: uint64(i),
+				}),
 		}
 		ents = append(ents, ent)
 	}
@@ -596,8 +627,8 @@ func TestApplyMultiConfChangeShouldStop(t *testing.T) {
 	}
 }
 
-// TestSnapshot should snapshot the store and cut the persistent
-func TestSnapshot(t *testing.T) {
+// TestSnapshotDisk should save the snapshot to disk and release old snapshots
+func TestSnapshotDisk(t *testing.T) {
 	revertFunc := verify.DisableVerifications()
 	defer revertFunc()
 
@@ -636,24 +667,65 @@ func TestSnapshot(t *testing.T) {
 		gaction, _ := p.Wait(2)
 		defer func() { ch <- struct{}{} }()
 
-		if len(gaction) != 2 {
-			t.Errorf("len(action) = %d, want 2", len(gaction))
-			return
-		}
-		if !reflect.DeepEqual(gaction[0], testutil.Action{Name: "SaveSnap"}) {
-			t.Errorf("action = %s, want SaveSnap", gaction[0])
-		}
-
-		if !reflect.DeepEqual(gaction[1], testutil.Action{Name: "Release"}) {
-			t.Errorf("action = %s, want Release", gaction[1])
-		}
+		assert.Len(t, gaction, 2)
+		assert.Equal(t, testutil.Action{Name: "SaveSnap"}, gaction[0])
+		assert.Equal(t, testutil.Action{Name: "Release"}, gaction[1])
 	}()
-
-	srv.snapshot(1, raftpb.ConfState{Voters: []uint64{1}})
+	ep := etcdProgress{appliedi: 1, confState: raftpb.ConfState{Voters: []uint64{1}}}
+	srv.snapshot(&ep, true)
 	<-ch
-	if len(st.Action()) != 0 {
-		t.Errorf("no action expected on v2store. Got %d actions", len(st.Action()))
+	assert.Empty(t, st.Action())
+	assert.Equal(t, uint64(1), ep.diskSnapshotIndex)
+	assert.Equal(t, uint64(1), ep.memorySnapshotIndex)
+}
+
+func TestSnapshotMemory(t *testing.T) {
+	revertFunc := verify.DisableVerifications()
+	defer revertFunc()
+
+	be, _ := betesting.NewDefaultTmpBackend(t)
+	defer betesting.Close(t, be)
+
+	s := raft.NewMemoryStorage()
+	s.Append([]raftpb.Entry{{Index: 1}})
+	st := mockstore.NewRecorderStream()
+	p := mockstorage.NewStorageRecorderStream("")
+	r := newRaftNode(raftNodeConfig{
+		lg:          zaptest.NewLogger(t),
+		Node:        newNodeNop(),
+		raftStorage: s,
+		storage:     p,
+	})
+	srv := &EtcdServer{
+		lgMu:         new(sync.RWMutex),
+		lg:           zaptest.NewLogger(t),
+		r:            *r,
+		v2store:      st,
+		consistIndex: cindex.NewConsistentIndex(be),
 	}
+	srv.kv = mvcc.New(zaptest.NewLogger(t), be, &lease.FakeLessor{}, mvcc.StoreConfig{})
+	defer func() {
+		assert.NoError(t, srv.kv.Close())
+	}()
+	srv.be = be
+
+	cl := membership.NewCluster(zaptest.NewLogger(t))
+	srv.cluster = cl
+
+	ch := make(chan struct{}, 1)
+
+	go func() {
+		gaction, _ := p.Wait(1)
+		defer func() { ch <- struct{}{} }()
+
+		assert.Empty(t, gaction)
+	}()
+	ep := etcdProgress{appliedi: 1, confState: raftpb.ConfState{Voters: []uint64{1}}}
+	srv.snapshot(&ep, false)
+	<-ch
+	assert.Empty(t, st.Action())
+	assert.Equal(t, uint64(0), ep.diskSnapshotIndex)
+	assert.Equal(t, uint64(1), ep.memorySnapshotIndex)
 }
 
 // TestSnapshotOrdering ensures raft persists snapshot onto disk before
@@ -674,7 +746,7 @@ func TestSnapshotOrdering(t *testing.T) {
 	testdir := t.TempDir()
 
 	snapdir := filepath.Join(testdir, "member", "snap")
-	if err := os.MkdirAll(snapdir, 0755); err != nil {
+	if err := os.MkdirAll(snapdir, 0o755); err != nil {
 		t.Fatalf("couldn't make snap dir (%v)", err)
 	}
 
@@ -765,7 +837,7 @@ func TestConcurrentApplyAndSnapshotV3(t *testing.T) {
 	cl.SetBackend(schema.NewMembershipBackend(lg, be))
 
 	testdir := t.TempDir()
-	if err := os.MkdirAll(testdir+"/member/snap", 0755); err != nil {
+	if err := os.MkdirAll(testdir+"/member/snap", 0o755); err != nil {
 		t.Fatalf("Couldn't make snap dir (%v)", err)
 	}
 
@@ -1105,7 +1177,8 @@ func TestPublishV3(t *testing.T) {
 		t.Fatalf("unmarshal request error: %v", err)
 	}
 	assert.Equal(t, &membershippb.ClusterMemberAttrSetRequest{Member_ID: 0x1, MemberAttributes: &membershippb.Attributes{
-		Name: "node1", ClientUrls: []string{"http://a", "http://b"}}}, r.ClusterMemberAttrSet)
+		Name: "node1", ClientUrls: []string{"http://a", "http://b"},
+	}}, r.ClusterMemberAttrSet)
 }
 
 // TestPublishV3Stopped tests that publish will be stopped if server is stopped.
@@ -1307,14 +1380,17 @@ func (n *nodeRecorder) Campaign(ctx context.Context) error {
 	n.Record(testutil.Action{Name: "Campaign"})
 	return nil
 }
+
 func (n *nodeRecorder) Propose(ctx context.Context, data []byte) error {
 	n.Record(testutil.Action{Name: "Propose", Params: []any{data}})
 	return nil
 }
+
 func (n *nodeRecorder) ProposeConfChange(ctx context.Context, conf raftpb.ConfChangeI) error {
 	n.Record(testutil.Action{Name: "ProposeConfChange"})
 	return nil
 }
+
 func (n *nodeRecorder) Step(ctx context.Context, msg raftpb.Message) error {
 	n.Record(testutil.Action{Name: "Step"})
 	return nil
@@ -1354,8 +1430,10 @@ type readyNode struct {
 func newReadyNode() *readyNode {
 	return &readyNode{
 		nodeRecorder{testutil.NewRecorderStream()},
-		make(chan raft.Ready, 1)}
+		make(chan raft.Ready, 1),
+	}
 }
+
 func newNopReadyNode() *readyNode {
 	return &readyNode{*newNodeRecorder(), make(chan raft.Ready, 1)}
 }
@@ -1401,9 +1479,11 @@ func (n *nodeConfChangeCommitterRecorder) ProposeConfChange(ctx context.Context,
 	n.readyc <- raft.Ready{CommittedEntries: []raftpb.Entry{{Index: n.index, Type: typ, Data: data}}}
 	return nil
 }
+
 func (n *nodeConfChangeCommitterRecorder) Ready() <-chan raft.Ready {
 	return n.readyc
 }
+
 func (n *nodeConfChangeCommitterRecorder) ApplyConfChange(conf raftpb.ConfChangeI) *raftpb.ConfState {
 	n.Record(testutil.Action{Name: "ApplyConfChange:" + confChangeActionName(conf)})
 	return &raftpb.ConfState{}

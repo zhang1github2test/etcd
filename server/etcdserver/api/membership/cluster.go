@@ -899,7 +899,7 @@ func (c *RaftCluster) Store(store v2store.Store) {
 		if m.ClientURLs != nil {
 			mustUpdateMemberAttrInStore(c.lg, store, m)
 		}
-		c.lg.Info(
+		c.lg.Debug(
 			"snapshot storing member",
 			zap.String("id", m.ID.String()),
 			zap.Strings("peer-urls", m.PeerURLs),
@@ -907,7 +907,7 @@ func (c *RaftCluster) Store(store v2store.Store) {
 		)
 	}
 	for id := range c.removed {
-		//We do not need to delete the member since the store is empty.
+		// We do not need to delete the member since the store is empty.
 		mustAddToRemovedMembersInStore(c.lg, store, id)
 	}
 	if c.version != nil {

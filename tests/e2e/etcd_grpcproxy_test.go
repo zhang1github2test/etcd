@@ -48,7 +48,8 @@ func TestGrpcProxyAutoSync(t *testing.T) {
 	)
 
 	// Run independent grpc-proxy instance
-	proxyProc, err := e2e.SpawnCmd([]string{e2e.BinPath.Etcd, "grpc-proxy", "start",
+	proxyProc, err := e2e.SpawnCmd([]string{
+		e2e.BinPath.Etcd, "grpc-proxy", "start",
 		"--advertise-client-url", proxyClientURL, "--listen-addr", proxyClientURL,
 		"--endpoints", node1ClientURL,
 		"--endpoints-auto-sync-interval", "1s",
@@ -107,7 +108,8 @@ func TestGrpcProxyTLSVersions(t *testing.T) {
 	)
 
 	// Run independent grpc-proxy instance
-	proxyProc, err := e2e.SpawnCmd([]string{e2e.BinPath.Etcd, "grpc-proxy", "start",
+	proxyProc, err := e2e.SpawnCmd([]string{
+		e2e.BinPath.Etcd, "grpc-proxy", "start",
 		"--advertise-client-url", proxyClientURL,
 		"--listen-addr", proxyClientURL,
 		"--endpoints", node1ClientURL,
@@ -135,10 +137,7 @@ func waitForEndpointInLog(ctx context.Context, proxyProc *expect.ExpectProcess, 
 	defer cancel()
 
 	_, err := proxyProc.ExpectFunc(ctx, func(s string) bool {
-		if strings.Contains(s, endpoint) {
-			return true
-		}
-		return false
+		return strings.Contains(s, endpoint)
 	})
 
 	return err

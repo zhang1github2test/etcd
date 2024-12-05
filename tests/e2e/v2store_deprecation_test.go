@@ -43,7 +43,8 @@ func writeCustomV2Data(t testing.TB, epc *e2e.EtcdProcessCluster, count int) {
 	for i := 0; i < count; i++ {
 		if err := e2e.CURLPut(epc, e2e.CURLReq{
 			Endpoint: "/v2/keys/foo", Value: "bar" + fmt.Sprint(i),
-			Expected: expect.ExpectedResponse{Value: `{"action":"set","node":{"key":"/foo","value":"bar` + fmt.Sprint(i)}}); err != nil {
+			Expected: expect.ExpectedResponse{Value: `{"action":"set","node":{"key":"/foo","value":"bar` + fmt.Sprint(i)},
+		}); err != nil {
 			t.Fatalf("failed put with curl (%v)", err)
 		}
 	}
@@ -242,13 +243,9 @@ func filterSnapshotFiles(path string) bool {
 func assertSnapshotsMatch(t testing.TB, firstDataDir, secondDataDir string, patch func([]byte) []byte) {
 	lg := zaptest.NewLogger(t)
 	firstFiles, err := fileutil.ListFiles(firstDataDir, filterSnapshotFiles)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	secondFiles, err := fileutil.ListFiles(secondDataDir, filterSnapshotFiles)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	assert.NotEmpty(t, firstFiles)
 	assert.NotEmpty(t, secondFiles)
 	assert.Equal(t, len(firstFiles), len(secondFiles))
@@ -256,13 +253,9 @@ func assertSnapshotsMatch(t testing.TB, firstDataDir, secondDataDir string, patc
 	sort.Strings(secondFiles)
 	for i := 0; i < len(firstFiles); i++ {
 		firstSnapshot, err := snap.Read(lg, firstFiles[i])
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		secondSnapshot, err := snap.Read(lg, secondFiles[i])
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		assertMembershipEqual(t, openSnap(patch(firstSnapshot.Data)), openSnap(patch(secondSnapshot.Data)))
 	}
 }
@@ -270,13 +263,13 @@ func assertSnapshotsMatch(t testing.TB, firstDataDir, secondDataDir string, patc
 func assertMembershipEqual(t testing.TB, firstStore v2store.Store, secondStore v2store.Store) {
 	rc1 := membership.NewCluster(zaptest.NewLogger(t))
 	rc1.SetStore(firstStore)
-	rc1.Recover(func(lg *zap.Logger, v *semver.Version) { return })
+	rc1.Recover(func(lg *zap.Logger, v *semver.Version) {})
 
 	rc2 := membership.NewCluster(zaptest.NewLogger(t))
 	rc2.SetStore(secondStore)
-	rc2.Recover(func(lg *zap.Logger, v *semver.Version) { return })
+	rc2.Recover(func(lg *zap.Logger, v *semver.Version) {})
 
-	//membership should match
+	// membership should match
 	if !reflect.DeepEqual(rc1.Members(), rc2.Members()) {
 		t.Logf("memberids_from_last_version = %+v, member_ids_from_current_version = %+v", rc1.MemberIDs(), rc2.MemberIDs())
 		t.Errorf("members_from_last_version_snapshot = %+v, members_from_current_version_snapshot %+v", rc1.Members(), rc2.Members())

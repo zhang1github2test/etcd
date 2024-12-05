@@ -50,12 +50,15 @@ func TestCtlV3MemberUpdate(t *testing.T) { testCtl(t, memberUpdateTest) }
 func TestCtlV3MemberUpdateNoTLS(t *testing.T) {
 	testCtl(t, memberUpdateTest, withCfg(*e2e.NewConfigNoTLS()))
 }
+
 func TestCtlV3MemberUpdateClientTLS(t *testing.T) {
 	testCtl(t, memberUpdateTest, withCfg(*e2e.NewConfigClientTLS()))
 }
+
 func TestCtlV3MemberUpdateClientAutoTLS(t *testing.T) {
 	testCtl(t, memberUpdateTest, withCfg(*e2e.NewConfigClientAutoTLS()))
 }
+
 func TestCtlV3MemberUpdatePeerTLS(t *testing.T) {
 	testCtl(t, memberUpdateTest, withCfg(*e2e.NewConfigPeerTLS()))
 }
@@ -253,16 +256,12 @@ func memberListWithHexTest(cx ctlCtx) {
 
 func memberAddTest(cx ctlCtx) {
 	peerURL := fmt.Sprintf("http://localhost:%d", e2e.EtcdProcessBasePort+11)
-	if err := ctlV3MemberAdd(cx, peerURL, false); err != nil {
-		cx.t.Fatal(err)
-	}
+	require.NoError(cx.t, ctlV3MemberAdd(cx, peerURL, false))
 }
 
 func memberAddAsLearnerTest(cx ctlCtx) {
 	peerURL := fmt.Sprintf("http://localhost:%d", e2e.EtcdProcessBasePort+11)
-	if err := ctlV3MemberAdd(cx, peerURL, true); err != nil {
-		cx.t.Fatal(err)
-	}
+	require.NoError(cx.t, ctlV3MemberAdd(cx, peerURL, true))
 }
 
 func ctlV3MemberAdd(cx ctlCtx, peerURL string, isLearner bool) error {
@@ -277,15 +276,11 @@ func ctlV3MemberAdd(cx ctlCtx, peerURL string, isLearner bool) error {
 
 func memberUpdateTest(cx ctlCtx) {
 	mr, err := getMemberList(cx, false)
-	if err != nil {
-		cx.t.Fatal(err)
-	}
+	require.NoError(cx.t, err)
 
 	peerURL := fmt.Sprintf("http://localhost:%d", e2e.EtcdProcessBasePort+11)
 	memberID := fmt.Sprintf("%x", mr.Members[0].ID)
-	if err = ctlV3MemberUpdate(cx, memberID, peerURL); err != nil {
-		cx.t.Fatal(err)
-	}
+	require.NoError(cx.t, ctlV3MemberUpdate(cx, memberID, peerURL))
 }
 
 func ctlV3MemberUpdate(cx ctlCtx, memberID, peerURL string) error {
@@ -307,6 +302,5 @@ func TestRemoveNonExistingMember(t *testing.T) {
 	require.Error(t, err)
 
 	// Ensure that membership is properly bootstrapped.
-	err = epc.Restart(ctx)
-	assert.NoError(t, err)
+	assert.NoError(t, epc.Restart(ctx))
 }

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"go.etcd.io/etcd/pkg/v3/expect"
 	"go.etcd.io/etcd/tests/v3/framework/e2e"
 )
@@ -28,9 +30,11 @@ import (
 func TestClusterOf1UsingV3Discovery_1endpoint(t *testing.T) {
 	testClusterUsingV3Discovery(t, 1, 1, e2e.ClientNonTLS, false)
 }
+
 func TestClusterOf3UsingV3Discovery_1endpoint(t *testing.T) {
 	testClusterUsingV3Discovery(t, 1, 3, e2e.ClientTLS, true)
 }
+
 func TestTLSClusterOf5UsingV3Discovery_1endpoint(t *testing.T) {
 	testClusterUsingV3Discovery(t, 1, 5, e2e.ClientTLS, false)
 }
@@ -38,9 +42,11 @@ func TestTLSClusterOf5UsingV3Discovery_1endpoint(t *testing.T) {
 func TestClusterOf1UsingV3Discovery_3endpoints(t *testing.T) {
 	testClusterUsingV3Discovery(t, 3, 1, e2e.ClientNonTLS, false)
 }
+
 func TestClusterOf3UsingV3Discovery_3endpoints(t *testing.T) {
 	testClusterUsingV3Discovery(t, 3, 3, e2e.ClientTLS, true)
 }
+
 func TestTLSClusterOf5UsingV3Discovery_3endpoints(t *testing.T) {
 	testClusterUsingV3Discovery(t, 3, 5, e2e.ClientTLS, false)
 }
@@ -77,12 +83,8 @@ func testClusterUsingV3Discovery(t *testing.T, discoveryClusterSize, targetClust
 
 	// step 4: sanity test on the etcd cluster
 	etcdctl := []string{e2e.BinPath.Etcdctl, "--endpoints", strings.Join(epc.EndpointsGRPC(), ",")}
-	if err := e2e.SpawnWithExpect(append(etcdctl, "put", "key", "value"), expect.ExpectedResponse{Value: "OK"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e2e.SpawnWithExpect(append(etcdctl, "get", "key"), expect.ExpectedResponse{Value: "value"}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, e2e.SpawnWithExpect(append(etcdctl, "put", "key", "value"), expect.ExpectedResponse{Value: "OK"}))
+	require.NoError(t, e2e.SpawnWithExpect(append(etcdctl, "get", "key"), expect.ExpectedResponse{Value: "value"}))
 }
 
 func bootstrapEtcdClusterUsingV3Discovery(t *testing.T, discoveryEndpoints []string, discoveryToken string, clusterSize int, clientTLSType e2e.ClientConnType, isClientAutoTLS bool) (*e2e.EtcdProcessCluster, error) {
