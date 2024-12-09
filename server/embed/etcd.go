@@ -96,12 +96,17 @@ type peerListener struct {
 // The returned Etcd.Server is not guaranteed to have joined the cluster. Wait
 // on the Etcd.Server.ReadyNotify() channel to know when it completes and is ready for use.
 func StartEtcd(inCfg *Config) (e *Etcd, err error) {
+
+	// 1.配置验证
 	if err = inCfg.Validate(); err != nil {
 		return nil, err
 	}
 	serving := false
+	// 初始化 ETCD 实例
 	e = &Etcd{cfg: *inCfg, stopc: make(chan struct{})}
 	cfg := &e.cfg
+
+	// 如果服务未成功启动，则关闭所有资源和监听器
 	defer func() {
 		if e == nil || err == nil {
 			return
@@ -127,6 +132,8 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		"configuring peer listeners",
 		zap.Strings("listen-peer-urls", e.cfg.getListenPeerURLs()),
 	)
+
+	// 配置 Peer（节点间通信）监听器
 	if e.Peers, err = configurePeerListeners(cfg); err != nil {
 		return e, err
 	}
@@ -135,6 +142,8 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		"configuring client listeners",
 		zap.Strings("listen-client-urls", e.cfg.getListenClientURLs()),
 	)
+
+	// 配置 Client（客户端通信）监听器
 	if e.sctxs, err = configureClientListeners(cfg); err != nil {
 		return e, err
 	}
@@ -147,6 +156,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		urlsmap types.URLsMap
 		token   string
 	)
+	// 初始化集群信息
 	memberInitialized := true
 	if !isMemberInitialized(cfg) {
 		memberInitialized = false
@@ -160,6 +170,8 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	if len(cfg.AutoCompactionRetention) == 0 {
 		cfg.AutoCompactionRetention = "0"
 	}
+
+	// 设置存储和压缩选项
 	autoCompactionRetention, err := parseCompactionRetention(cfg.AutoCompactionMode, cfg.AutoCompactionRetention)
 	if err != nil {
 		return e, err
@@ -250,6 +262,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
 	print(e.cfg.logger, *cfg, srvcfg, memberInitialized)
 
+	// 创建服务实例
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {
 		return e, err
 	}
@@ -270,12 +283,15 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 			return e, err
 		}
 	}
+
+	// 启动服务
 	e.Server.Start()
 
 	e.servePeers()
 
 	e.serveClients()
 
+	// 用于暴露 ETCD 的 监控指标
 	if err = e.serveMetrics(); err != nil {
 		return e, err
 	}
@@ -504,12 +520,18 @@ func (e *Etcd) Err() <-chan error {
 }
 
 func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
+	// 更新加密套件配置
 	if err = updateCipherSuites(&cfg.PeerTLSInfo, cfg.CipherSuites); err != nil {
 		return nil, err
 	}
+
+	// PeerAutoTLS设置为true的场景并且没有设置TLS信息的场景下
+	// 启用自签名
 	if err = cfg.PeerSelfCert(); err != nil {
 		cfg.logger.Fatal("failed to get peer self-signed certs", zap.Error(err))
 	}
+
+	// 更新 TLS 的最小和最大版本
 	updateMinMaxVersions(&cfg.PeerTLSInfo, cfg.TlsMinVersion, cfg.TlsMaxVersion)
 	if !cfg.PeerTLSInfo.Empty() {
 		cfg.logger.Info(
@@ -520,6 +542,8 @@ func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 	}
 
 	peers = make([]*peerListener, len(cfg.ListenPeerUrls))
+
+	// 在配置peer的监听器出现错误的情况下，保证能够关闭掉监听器
 	defer func() {
 		if err == nil {
 			return
@@ -538,6 +562,7 @@ func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 		}
 	}()
 
+	// 为每一个PeerUrl设置一个监听器
 	for i, u := range cfg.ListenPeerUrls {
 		if u.Scheme == "http" {
 			if !cfg.PeerTLSInfo.Empty() {
@@ -548,6 +573,7 @@ func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 			}
 		}
 		peers[i] = &peerListener{close: func(context.Context) error { return nil }}
+		//创建监听器
 		peers[i].Listener, err = transport.NewListenerWithOpts(u.Host, u.Scheme,
 			transport.WithTLSInfo(&cfg.PeerTLSInfo),
 			transport.WithSocketOpts(&cfg.SocketOpts),
@@ -674,6 +700,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 		sctx.httpOnly = true
 	}
 
+	// 创建监听器
 	for _, sctx := range sctxs {
 		if sctx.l, err = transport.NewListenerWithOpts(sctx.addr, sctx.scheme,
 			transport.WithSocketOpts(&cfg.SocketOpts),
@@ -684,6 +711,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 		// net.Listener will rewrite ipv4 0.0.0.0 to ipv6 [::], breaking
 		// hosts that disable ipv6. So, use the address given by the user.
 
+		// 文件描述符限制数量检测
 		if fdLimit, fderr := runtimeutil.FDLimit(); fderr == nil {
 			if fdLimit <= reservedInternalFDNum {
 				cfg.logger.Fatal(
@@ -710,9 +738,11 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 			sctx.userHandlers[k] = cfg.UserHandlers[k]
 		}
 		sctx.serviceRegister = cfg.ServiceRegister
+		// 注册pprof性能调试工具
 		if cfg.EnablePprof || cfg.LogLevel == "debug" {
 			sctx.registerPprof()
 		}
+		// 注册跟踪工具
 		if cfg.LogLevel == "debug" {
 			sctx.registerTrace()
 		}

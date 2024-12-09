@@ -42,13 +42,17 @@ var (
 )
 
 func startEtcdOrProxyV2(args []string) {
-	// 禁用 gRPC 跟踪
+	// 禁用 gRPC 跟踪，优化性能
 	grpc.EnableTracing = false
 
+	// 创建一个新的配置对象
 	cfg := newConfig()
+	// 保存初始集群配置，方便后续处理
 	defaultInitialCluster := cfg.ec.InitialCluster
 
+	// 解析传入的命令行参数，将配置赋值给 cfg
 	err := cfg.parse(args[1:])
+	// 初始化日志记录器，确保所有输出都写入日志。
 	lg := cfg.ec.GetLogger()
 	// If we failed to parse the whole configuration, print the error using
 	// preferably the resolved logger from the config,
@@ -81,6 +85,7 @@ func startEtcdOrProxyV2(args []string) {
 		}
 	}()
 
+	// 解析默认集群地址
 	defaultHost, dhErr := (&cfg.ec).UpdateDefaultClusterFromName(defaultInitialCluster)
 	if defaultHost != "" {
 		lg.Info(
@@ -92,6 +97,7 @@ func startEtcdOrProxyV2(args []string) {
 		lg.Info("failed to detect default host", zap.Error(dhErr))
 	}
 
+	// 设置数据目录 如果未指定数据目录，使用默认目录
 	if cfg.ec.Dir == "" {
 		cfg.ec.Dir = fmt.Sprintf("%v.etcd", cfg.ec.Name)
 		lg.Warn(
@@ -103,6 +109,7 @@ func startEtcdOrProxyV2(args []string) {
 	var stopped <-chan struct{}
 	var errc <-chan error
 
+	// 判断数据目录类型并启动
 	which := identifyDataDirOrDie(cfg.ec.GetLogger(), cfg.ec.Dir)
 	if which != dirEmpty {
 		lg.Info(
@@ -112,7 +119,7 @@ func startEtcdOrProxyV2(args []string) {
 		)
 		switch which {
 		case dirMember:
-			stopped, errc, err = startEtcd(&cfg.ec)
+			stopped, errc, err = startEtcd(&cfg.ec) // 启动 ETCD 服务
 		case dirProxy:
 			lg.Panic("v2 http proxy has already been deprecated in 3.6", zap.String("dir-type", string(which)))
 		default:
@@ -130,6 +137,7 @@ func startEtcdOrProxyV2(args []string) {
 		stopped, errc, err = startEtcd(&cfg.ec)
 	}
 
+	// 处理启动错误
 	if err != nil {
 		var derr *errors.DiscoveryError
 		if errorspkg.As(err, &derr) {
@@ -184,6 +192,7 @@ func startEtcdOrProxyV2(args []string) {
 		lg.Fatal("discovery failed", zap.Error(err))
 	}
 
+	// 信号处理与退出
 	osutil.HandleInterrupts(lg)
 
 	// At this point, the initialization of etcd is done.
@@ -205,11 +214,19 @@ func startEtcdOrProxyV2(args []string) {
 
 // startEtcd runs StartEtcd in addition to hooks needed for standalone etcd.
 func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
+	// 是启动 ETCD 服务的核心函数。它负责初始化 ETCD 实例、注册中断信号处理，
+	// 并等待服务成功启动或异常停止。
+	// 最后，返回相关的停止和错误通道
 	e, err := embed.StartEtcd(cfg)
+
+	// 启动失败，立即返回错误
 	if err != nil {
 		return nil, nil, err
 	}
+	// 注册中断信号处理
 	osutil.RegisterInterruptHandler(e.Close)
+
+	// 等待服务状态
 	select {
 	case <-e.Server.ReadyNotify(): // wait for e.Server to join the cluster
 	case <-e.Server.StopNotify(): // publish aborted from 'ErrStopped'

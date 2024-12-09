@@ -23,12 +23,13 @@ import (
 )
 
 func Main(args []string) {
+	// 1. 检查系统架构支持
 	checkSupportArch()
 
-	if len(args) > 1 {
+	if len(args) > 1 { // // 2. 检查命令行参数
 		cmd := args[1]
 		switch cmd {
-		case "gateway", "grpc-proxy":
+		case "gateway", "grpc-proxy": // // 3. 判断是否运行网关或 gRPC 代理模式
 			if err := rootCmd.Execute(); err != nil {
 				fmt.Fprint(os.Stderr, err)
 				os.Exit(1)
@@ -37,7 +38,7 @@ func Main(args []string) {
 		}
 	}
 
-	startEtcdOrProxyV2(args)
+	startEtcdOrProxyV2(args) // // 4. 启动普通 ETCD 节点或代理节点
 }
 
 func notifySystemd(lg *zap.Logger) {
